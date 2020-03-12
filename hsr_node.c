@@ -373,6 +373,8 @@ int main(int argc, char *argv[])
 			exit(EXIT_FAILURE);
 		ret = list_nodes(argc, argv, genl_id, nl);
 	} else if (strncmp(argv[1], "status", strlen(argv[1])) == 0) {
+		if (argc < 4)
+			exit(EXIT_FAILURE);
 		ret = status_node(argc, argv, genl_id, nl);
 	} else if (strncmp(argv[1], "dump", strlen(argv[1])) == 0) {
 		ret = dump_nodes(argc, argv, genl_id, nl);
