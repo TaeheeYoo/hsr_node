@@ -174,11 +174,6 @@ int genl_lookup_family(struct mnl_socket *nl, const char *family)
 	return genl_id;
 }
 
-static void hsr_build_payload(struct nlmsghdr *nlh, int ifindex)
-{
-	mnl_attr_put_u32(nlh, HSR_A_IFINDEX, ifindex);
-}
-
 static int genl_hsr_validate_cb(const struct nlattr *attr, void *data)
 {
 	int type = mnl_attr_get_type(attr);
@@ -189,20 +184,51 @@ static int genl_hsr_validate_cb(const struct nlattr *attr, void *data)
 	if (mnl_attr_type_valid(attr, HSR_C_MAX) < 0)
 		return MNL_CB_OK;
 
-	//printf("[TEST]%s %u \n", __func__, __LINE__);
 	switch(type) {
 	case HSR_A_IFINDEX:
 		ifindex = mnl_attr_get_u32(attr);
 		if (if_indextoname(ifindex, buf) == NULL)
 			snprintf(buf, IFNAMSIZ, "if%u", ifindex);
 		printf("Interface: %s\n", buf);
-
 		break;
 	case HSR_A_NODE_ADDR:
-		//printf("[TEST]%s %u \n", __func__, __LINE__);
 		memcpy(addr, mnl_attr_get_payload(attr), ETH_ALEN);
-		printf("%02x:%02x:%02x:%02x:%02x:%02x\n",
-			addr[0], addr[1], addr[2], addr[3], addr[4], addr[5]);
+		printf("MAC address A: %02x:%02x:%02x:%02x:%02x:%02x\n",
+		       addr[0], addr[1], addr[2], addr[3], addr[4], addr[5]);
+		break;
+	case HSR_A_IF1_AGE:
+		printf("Interface1 age: %ums\n", mnl_attr_get_u32(attr));
+		break;
+	case HSR_A_IF2_AGE:
+		printf("Interface2 age: %ums\n", mnl_attr_get_u32(attr));
+		break;
+	case HSR_A_NODE_ADDR_B:
+		memcpy(addr, mnl_attr_get_payload(attr), ETH_ALEN);
+		printf("MAC address B: %02x:%02x:%02x:%02x:%02x:%02x\n",
+		       addr[0], addr[1], addr[2], addr[3], addr[4], addr[5]);
+		break;
+	case HSR_A_IF1_SEQ:
+		printf("Interface1 sequence: %u\n", mnl_attr_get_u16(attr));
+		break;
+	case HSR_A_IF2_SEQ:
+		printf("Interface2 sequence: %u\n", mnl_attr_get_u16(attr));
+		break;
+	case HSR_A_IF1_IFINDEX:
+		ifindex = mnl_attr_get_u32(attr);
+		if (if_indextoname(ifindex, buf) == NULL)
+			snprintf(buf, IFNAMSIZ, "if%u", ifindex);
+		printf("Slave interface1: %s\n", buf);
+
+		break;
+	case HSR_A_IF2_IFINDEX:
+		ifindex = mnl_attr_get_u32(attr);
+		if (if_indextoname(ifindex, buf) == NULL)
+			snprintf(buf, IFNAMSIZ, "if%u", ifindex);
+		printf("Slave interface2: %s\n", buf);
+		break;
+	case HSR_A_ADDR_B_IFINDEX:
+		ifindex = mnl_attr_get_u32(attr);
+		printf("Address B index: %u\n", ifindex);
 		break;
 	default:
 		printf("[TEST]%s %u type = %d \n", __func__, __LINE__, type);
@@ -215,9 +241,7 @@ static int genl_hsr_attr_cb(const struct nlmsghdr *nlh, void *data)
 {
 	struct genlmsghdr *genl;
 
-	//printf("[TEST]%s %u \n", __func__, __LINE__);
 	mnl_attr_parse(nlh, sizeof(*genl), genl_hsr_validate_cb, NULL);
-	//printf("[TEST]%s %u \n", __func__, __LINE__);
 
 	return MNL_CB_OK;
 }
@@ -231,9 +255,29 @@ int hsr_list_nodes(int genl_id, int ifindex, struct mnl_socket *nl)
 	nlh = genl_nlmsg_build_hdr(buf, genl_id, NLM_F_EXCL | NLM_F_ACK, ++seq,
 				   HSR_C_GET_NODE_LIST);
 
-	hsr_build_payload(nlh, ifindex);
+	mnl_attr_put_u32(nlh, HSR_A_IFINDEX, ifindex);
 
-	printf("MAC-Address-A\n");
+	if (genl_socket_talk(nl, nlh, seq, genl_hsr_attr_cb, NULL) < 0) {
+		perror("genl_socket_talk");
+		return 0;
+	}
+
+	return 0;
+}
+
+int hsr_status_node(int genl_id, int ifindex, struct mnl_socket *nl, char *lladdr)
+{
+	char buf[MNL_SOCKET_BUFFER_SIZE];
+	struct nlmsghdr *nlh;
+	uint32_t seq = time(NULL);
+
+	nlh = genl_nlmsg_build_hdr(buf, genl_id, NLM_F_EXCL | NLM_F_ACK, ++seq,
+				   HSR_C_GET_NODE_STATUS);
+
+	mnl_attr_put_u32(nlh, HSR_A_IFINDEX, ifindex);
+
+	mnl_attr_put_check(nlh, MNL_SOCKET_BUFFER_SIZE, HSR_A_NODE_ADDR, ETH_ALEN, lladdr);
+
 	if (genl_socket_talk(nl, nlh, seq, genl_hsr_attr_cb, NULL) < 0) {
 		perror("genl_socket_talk");
 		return 0;
@@ -274,6 +318,28 @@ list_nodes(int argc, char *argv[], int genl_id, struct mnl_socket *nl)
 }
 
 static int
+status_node(int argc, char *argv[], int genl_id, struct mnl_socket *nl)
+{
+	int ifindex;
+	char lladdr[ETH_ALEN];
+
+	ifindex = if_nametoindex(argv[2]);
+	if (ifindex == 0) {
+		perror("if_nametoindex");
+		return -1;
+	}
+
+	if (sscanf(argv[3], "%hhx:%hhx:%hhx:%hhx:%hhx:%hhx",
+		   lladdr, lladdr+1, lladdr+2, lladdr+3, lladdr+4, lladdr+5) != 6) {
+		perror("Invalid mac address\n");
+		return 0;
+	}
+
+
+	return hsr_status_node(genl_id, ifindex , nl, lladdr);
+}
+
+static int
 dump_nodes(int argc, char *argv[], int genl_id, struct mnl_socket *nl)
 {
 	return hsr_dump_nodes(genl_id, nl);
@@ -306,6 +372,8 @@ int main(int argc, char *argv[])
 		if (argc < 3)
 			exit(EXIT_FAILURE);
 		ret = list_nodes(argc, argv, genl_id, nl);
+	} else if (strncmp(argv[1], "status", strlen(argv[1])) == 0) {
+		ret = status_node(argc, argv, genl_id, nl);
 	} else if (strncmp(argv[1], "dump", strlen(argv[1])) == 0) {
 		ret = dump_nodes(argc, argv, genl_id, nl);
 	} else {
